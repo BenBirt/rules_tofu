@@ -16,9 +16,9 @@ load(":providers.bzl", "TfLibraryInfo", "TfProviderInfo")
 load(
     ":work_tree.bzl",
     "ALLOWED_SRC_EXTS",
-    "PLUGIN_DIR_RELPATH",
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
+    _plugin_tree_root = "plugin_tree_root",
     _work_tree_root = "work_tree_root",
 )
 
@@ -53,7 +53,7 @@ def _tf_library_impl(ctx):
         work_tree_files = work_tree_files,
         work_tree_root = _work_tree_root(ctx),
         package_dir = ctx.label.package,
-        plugin_dir_relpath = PLUGIN_DIR_RELPATH,
+        plugin_tree_root = _plugin_tree_root(ctx),
     )
 
     return [

@@ -92,7 +92,7 @@ See `examples/hello/` for a minimal no-provider example that exercises
 A `tf_deploy` may declare its own `providers = [...]`; the union
 of a deploy's direct providers and the providers contributed by its
 library `deps` is the set that gets vendored. The exec-platform binary is
-symlinked into the deploy's work tree at Terraform's canonical
+symlinked alongside the deploy's work tree at Terraform's canonical
 `<host>/<namespace>/<name>/<version>/<os>_<arch>/` layout, and `tofu init`
 is run with `-plugin-dir=<that tree>`.
 
