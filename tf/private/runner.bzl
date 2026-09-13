@@ -31,6 +31,15 @@ def _tf_runner_impl(ctx):
         name = ctx.attr.deploy.label.name,
     )
 
+    # The plugin tree is a sibling of the work tree, at
+    # `<workspace>/<pkg>/<name>.plugins`. Derived from the deploy's label the
+    # same way as the work tree root — the deploy doesn't need to carry it.
+    plugin_tree_root = "{ws}/{pkg}/{name}.plugins".format(
+        ws = workspace_name,
+        pkg = ctx.attr.deploy.label.package,
+        name = ctx.attr.deploy.label.name,
+    )
+
     # State lives at the deploy's `$(RULEDIR)/<name>.rules_tofu-state` —
     # i.e. `bazel-out/<config>/bin/<pkg>/<name>.rules_tofu-state`. That
     # path is already covered by the standard `bazel-*` gitignore and is
@@ -60,7 +69,7 @@ exec "$R/{runner}" \\
     --tofu="$R/{tofu}" \\
     --work-tree="$R/{work_tree}" \\
     --package-dir="{pkg}" \\
-    --plugin-dir="$R/{work_tree}/{plugin_rel}" \\
+    --plugin-dir="$R/{plugin_tree}" \\
     --state-dir="${{BUILD_WORKSPACE_DIRECTORY:?must be invoked via 'bazel run'}}/{state_dir_rel}" \\
     --command="{command}" \\
 {var_file_flags}    -- "$@"
@@ -68,8 +77,8 @@ exec "$R/{runner}" \\
             runner = runner_rel,
             tofu = tofu_rel,
             work_tree = work_tree_root,
+            plugin_tree = plugin_tree_root,
             pkg = deploy.package_dir,
-            plugin_rel = deploy.plugin_dir_relpath,
             state_dir_rel = state_dir_rel,
             command = ctx.attr.command,
             var_file_flags = var_file_flags,

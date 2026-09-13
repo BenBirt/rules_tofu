@@ -34,9 +34,9 @@ load(":var_files_check.bzl", "DUPCHECK_BIN", _tf_check_var_files = "tf_check_var
 load(
     ":work_tree.bzl",
     "ALLOWED_SRC_EXTS",
-    "PLUGIN_DIR_RELPATH",
     _materialize = "materialize",
     _materialize_plugin_tree = "materialize_plugin_tree",
+    _plugin_tree_root = "plugin_tree_root",
     _work_tree_root = "work_tree_root",
 )
 
@@ -70,7 +70,7 @@ def _tf_deploy_impl(ctx):
         work_tree_files = work_tree_files,
         work_tree_root = _work_tree_root(ctx),
         package_dir = ctx.label.package,
-        plugin_dir_relpath = PLUGIN_DIR_RELPATH,
+        plugin_tree_root = _plugin_tree_root(ctx),
     )
 
     var_files_check_stamp = _tf_check_var_files(
@@ -89,7 +89,6 @@ def _tf_deploy_impl(ctx):
             work_tree_files = work_tree_files,
             package_dir = ctx.label.package,
             var_file_relpaths = [f.short_path for f in ctx.files.var_files],
-            plugin_dir_relpath = PLUGIN_DIR_RELPATH,
         ),
     ]
 
@@ -164,7 +163,7 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
       providers: `tf_provider` targets (typically `@<repo>//:provider` exposed
           by `tf_providers.provider(...)` in MODULE.bazel) declared at the deploy
           level. Unioned with providers transitively contributed by `deps`. The exec
-          platform binary is symlinked into the work tree's plugin dir; `tofu init`
+          platform binary is symlinked into a sibling plugin tree; `tofu init`
           runs offline against it.
       fmt_test: whether to emit a `:<name>.fmt_check` test target. Only emitted
           when True (the default) and `srcs` is non-empty.

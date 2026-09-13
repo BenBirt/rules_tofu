@@ -4,20 +4,16 @@
 A "work tree" is the directory under `bazel-bin/<pkg>/<name>.work/` into
 which a rule symlinks every transitive `.tf`/data file at its
 workspace-relative path, plus (for deploys) a generated
-`rules_tofu.auto.tfvars.json`, plus the vendored provider plugin tree under
-`.rules_tofu-plugins/`. `tofu init -plugin-dir=<plugin_tree>` then sees a
-self-contained tree that mirrors a real Terraform working directory.
+`rules_tofu.auto.tfvars.json`. The vendored provider plugin tree lives in a
+sibling directory, `bazel-bin/<pkg>/<name>.plugins/`, so `tofu init
+-plugin-dir=<plugin_tree>` reads the providers in place without the work
+tree ever carrying the (large) provider binaries.
 
 `materialize(...)` handles the .tf/data half (with optional tfvars).
 `materialize_plugin_tree(...)` handles the per-provider symlinks.
 """
 
 load("//toolchain:toolchain.bzl", "TOOLCHAIN_TYPE")
-
-# Path within a work tree at which we materialize provider plugin binaries.
-# Layout under this root follows Terraform's standard plugin-dir convention:
-# `<host>/<namespace>/<name>/<version>/<os>_<arch>/<binary>`.
-PLUGIN_DIR_RELPATH = ".rules_tofu-plugins"
 
 # Only structural Terraform inputs are allowed in a rule's srcs. Variable
 # values come from `tf_deploy(vars = {...})`; allowing `.tfvars[.json]`
@@ -100,10 +96,11 @@ def materialize(ctx, entries, tfvars_content = None):
     return outputs
 
 def materialize_plugin_tree(ctx, providers_depset):
-    """Symlink provider binaries into the work tree's plugin directory.
+    """Symlink provider binaries into this rule's sibling plugin tree.
 
-    Creates one symlink per unique `(address, version)` using Terraform's
-    canonical layout.
+    Declares outputs under `<name>.plugins/` (a sibling of the work tree),
+    one symlink per unique `(address, version)` using Terraform's canonical
+    plugin-dir layout `<host>/<namespace>/<name>/<version>/<os>_<arch>/<binary>`.
 
     Args:
       ctx: rule ctx. Must list `TOOLCHAIN_TYPE` in `toolchains` so
@@ -118,7 +115,7 @@ def materialize_plugin_tree(ctx, providers_depset):
     """
     tofu = ctx.toolchains[TOOLCHAIN_TYPE].tofu
     platform_key = tofu.platform_key
-    work_prefix = ctx.label.name + ".work"
+    plugin_prefix = ctx.label.name + ".plugins"
 
     seen_versions = {}
     outputs = []
@@ -154,9 +151,8 @@ def materialize_plugin_tree(ctx, providers_depset):
         parts = prov.address.split("/")
         if len(parts) != 3:
             fail("invalid provider address `{}` (expected `<host>/<ns>/<name>`)".format(prov.address))
-        target_rel = "{prefix}/{rel}/{host}/{ns}/{name}/{version}/{plat}/{filename}".format(
-            prefix = work_prefix,
-            rel = PLUGIN_DIR_RELPATH,
+        target_rel = "{prefix}/{host}/{ns}/{name}/{version}/{plat}/{filename}".format(
+            prefix = plugin_prefix,
             host = parts[0],
             ns = parts[1],
             name = parts[2],
@@ -173,6 +169,18 @@ def materialize_plugin_tree(ctx, providers_depset):
 def work_tree_root(ctx):
     """Exec-root-relative path to this rule's work tree root."""
     return "{bin}/{pkg}/{name}.work".format(
+        bin = ctx.bin_dir.path,
+        pkg = ctx.label.package,
+        name = ctx.label.name,
+    )
+
+def plugin_tree_root(ctx):
+    """Exec-root-relative path to this rule's plugin tree root.
+
+    Sibling of `work_tree_root(ctx)`; the vendored provider binaries
+    declared by `materialize_plugin_tree(...)` live under it.
+    """
+    return "{bin}/{pkg}/{name}.plugins".format(
         bin = ctx.bin_dir.path,
         pkg = ctx.label.package,
         name = ctx.label.name,

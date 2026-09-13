@@ -89,8 +89,11 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   an extant directory. Don't make the flag optional.
 - Shared materialization helpers live in `tf/private/work_tree.bzl`
   (`materialize`, `materialize_plugin_tree`, `work_tree_root`,
-  `PLUGIN_DIR_RELPATH`). Both `library.bzl` and `deploy.bzl` should go
-  through them; don't reintroduce inline copies.
+  `plugin_tree_root`). Both `library.bzl` and `deploy.bzl` should go
+  through them; don't reintroduce inline copies. The plugin tree is a
+  sibling of the work tree (`<name>.plugins/`, not nested under
+  `<name>.work/`), so the validate action's work-tree copy never touches
+  provider binaries.
 - `module()` in `MODULE.bazel` deliberately has no `version`: the release
   tag is the single source of truth, and publish-to-bcr (or BCR's
   `add_module` on the manual path) patches the real version into the
