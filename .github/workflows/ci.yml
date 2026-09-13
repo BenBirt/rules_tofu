@@ -61,6 +61,23 @@ jobs:
             fi
           done
 
+      # Go sources are formatted by gofmt, which buildifier does not cover.
+      # The version comes from go.mod so there is one source of truth, even
+      # though Bazel builds with the SDK pinned in MODULE.bazel.
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Check Go formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::Go files are not gofmt-clean. Run 'gofmt -w .' and commit:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Set up Bazel
         uses: bazel-contrib/setup-bazel@0.19.0
         with:
