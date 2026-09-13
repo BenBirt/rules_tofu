@@ -68,10 +68,32 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 ## Invariants — don't regress these
 
 - No `.terraform.lock.hcl` is generated, shipped, or accepted in
-  `srcs`/`data`. `MODULE.bazel.lock` + the per-platform `sha256` on each
-  `tf_providers.provider(...)` tag is the sole pinning layer.
+  `srcs`/`data`. The per-platform `sha256` on each
+  `tf_providers.provider(...)` tag (and the table in
+  `toolchain/versions.bzl` for tofu itself) is the sole pinning layer:
+  every download is gated on it and the repository cache keys on it.
+  Both extensions declare `reproducible = True`, so they deliberately do
+  *not* appear in `MODULE.bazel.lock` — the lockfile pins the registry
+  module graph, not the provider/tofu artefacts.
   `init_action.bzl` fails loudly if a lock file slips into the work tree;
   don't relax that check.
+- Both module extensions call `module_ctx.extension_metadata` with the
+  dev/non-dev split keyed on `root_module_has_non_dev_dependency`, so
+  `bazel mod tidy` can manage downstream `use_repo` lines. Root direct
+  deps are `tofu_toolchains` only (never the internal `tofu_<platform>`
+  repos) and, for providers, only the repos backing the **root module's
+  own** tags. `bazel mod tidy` must leave `MODULE.bazel` unchanged.
+- The tofu extension resolves `tofu.version` as "root arbitrates": >1
+  root tag fails, one root tag wins unconditionally, agreeing non-root
+  requests are honoured, disagreeing non-root requests fail naming the
+  versions and modules, no tags means `DEFAULT_VERSION`. The branching
+  lives in `toolchain/version_resolution.bzl` as a pure function that
+  returns `struct(version, error)` — the extension owns the `fail()` so
+  the logic stays unit-testable from `//toolchain/tests`. Don't fold it
+  back inline, and don't make it last-write-wins. The providers
+  extension stays "root wins, else highest version": a provider is a
+  per-configuration artefact (MVS-shaped), the tofu binary is one global
+  tool.
 - `tf_library` validates inline — the validate stamp goes in
   `DefaultInfo.files` and `bazel build :foo_lib` is the validation
   contract. Don't add a `:foo.validate` sub-target or a `validate_test`
@@ -107,8 +129,13 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   registry entry. Don't add a version back, and don't hardcode release
   versions in README/docstring snippets — use the `X.Y.Z` placeholder
   plus a registry link.
+- `bazel_skylib` is a `dev_dependency`, so the Starlark unit tests that
+  load it live in the `//toolchain/tests` subpackage:
+  `toolchain/BUILD.bazel` is loaded by every downstream module (it holds
+  `:toolchain_type`) and must never reference a dev-only repo.
 - The `.bazelversion` copies (root, `e2e/smoke`,
-  `tests/integration/broken_workspace`) must stay byte-identical: nested
+  `tests/integration/broken_workspace`,
+  `tests/integration/broken_module`) must stay byte-identical: nested
   modules are separate bazelisk boundaries that never see the root pin.
   CI's lint job `cmp`s every nested copy against the root; bump them all
   together.
@@ -118,9 +145,12 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
   auto-discovered list covering all nested workspaces (including
   `e2e/smoke`). Rerun it after adding/removing nested packages; don't
   hand-edit the lists or add separate one-off lines.
-- The release tarball (`release_prep.sh`) excludes `examples/` and
-  `tests/` but must keep `e2e/` and `.bcr/` — BCR presubmit reads the
-  test module and templates from the extracted archive.
+- The release tarball (`release_prep.sh`) excludes `examples/`, `tests/`
+  and `toolchain/tests/` but must keep `e2e/` and `.bcr/` — BCR presubmit
+  reads the test module and templates from the extracted archive. The
+  pathspecs are prefix-anchored, so a package named `tests` nested under a
+  shipped directory needs its own exclusion; anything loading a
+  `dev_dependency` must not ship.
 
 ## Branch / PR conventions
 

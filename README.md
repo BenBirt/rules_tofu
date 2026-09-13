@@ -28,6 +28,14 @@ tofu = use_extension("@rules_tofu//toolchain:extensions.bzl", "tofu")
 use_repo(tofu, "tofu_toolchains")
 ```
 
+One OpenTofu toolchain is registered for the whole build, so all
+`tofu.version` tags in the module graph resolve to a single version: a tag
+in your root module wins outright (declare at most one), a version asked
+for by dependencies alone is honoured if they all agree, and dependencies
+asking for different versions is an error telling you to pin one yourself.
+With no tags anywhere, the version pinned in
+[`toolchain/versions.bzl`](toolchain/versions.bzl) is used.
+
 In a `BUILD.bazel`:
 
 ```python
@@ -98,14 +106,15 @@ is run with `-plugin-dir=<that tree>`.
 
 The effect is that `tofu init` — both the build-time `validate` action and
 the runtime invocation behind `:foo.plan` — never contacts a registry: no
-network is required to resolve providers once `MODULE.bazel.lock` has the
-zips. The providers' own backends are obviously not offline; `:foo.plan`
+network is required to resolve providers once the zips are in Bazel's
+repository cache. The providers' own backends are obviously not offline; `:foo.plan`
 and `:foo.apply` still talk to AWS / GCP / etc. at runtime as usual.
 
 Currently only providers published by the `hashicorp/` namespace (served
 via `releases.hashicorp.com`) are supported.
 
-`MODULE.bazel.lock` + the recorded `sha256` is the sole pinning layer: no
+The per-platform `sha256` recorded on each `tf_providers.provider(...)` tag
+is the sole pinning layer — every download is gated on it — so no
 `.terraform.lock.hcl` is generated, shipped, or accepted in `srcs`/`data`.
 
 Variable values can also come from `.tfvars.json` files — including files

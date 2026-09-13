@@ -10,7 +10,7 @@ jobs:
   build-and-test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Set up Bazel
         uses: bazel-contrib/setup-bazel@0.19.0
@@ -46,12 +46,13 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      # Nested Bazel modules (e2e/smoke, tests/integration/broken_workspace)
-      # each carry their own .bazelversion: bazelisk resolves the version from
-      # the nearest MODULE.bazel boundary and never sees the root pin. Keep
-      # every copy identical to the root file.
+      # Nested Bazel modules (e2e/smoke, tests/integration/broken_workspace,
+      # tests/integration/broken_module) each carry their own .bazelversion:
+      # bazelisk resolves the version from the nearest MODULE.bazel boundary
+      # and never sees the root pin. Keep every copy identical to the root
+      # file.
       - name: Check .bazelversion files are in sync
         run: |
           for f in $(git ls-files '*/.bazelversion'); do

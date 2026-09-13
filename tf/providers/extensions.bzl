@@ -39,10 +39,19 @@ declared that version. If two modules provide conflicting sha256 values for
 the same platform at the same version, the extension fails with a clear
 error.
 
+//toolchain:extensions.bzl resolves the OpenTofu version differently — the
+root arbitrates and disagreeing dependencies are an error, never
+highest-wins. The asymmetry is deliberate: a provider is a
+per-configuration artifact a library genuinely depends on, which puts it in
+the same domain as Bzlmod's own MVS, where taking the highest version is
+the norm. The tofu binary is a single global tool registered once for the
+whole build, and which version a build runs is the root module's call.
+
 The target `@tf_providers_<ns>_<name>//:provider` then carries
 `TfProviderInfo` and is passed to `tf_library`/`tf_deploy`
-via their `providers` attribute. Bazel's MODULE.bazel.lock pins the resolved
-SHAs, so the provider tree is reproducible and is fetched once per workspace.
+via their `providers` attribute. The `sha256` recorded on each tag gates the
+download, so the provider tree is reproducible and is fetched once per
+workspace.
 
 See `examples/aws/` and `examples/gcp/` in-tree for full end-to-end uses.
 
@@ -286,6 +295,11 @@ def _tf_providers_extension_impl(module_ctx):
     # Phase 1: Collect all provider tags into a flat list of structs,
     # then group by source.
     all_tags = []
+
+    # Repos the root is expected to `use_repo`: only those backing its own
+    # tags. A repo that exists purely because a dependency asked for the
+    # provider is not a direct dep of the root.
+    root_repos = []
     for mod in module_ctx.modules:
         for tag in mod.tags.provider:
             all_tags.append(struct(
@@ -295,6 +309,9 @@ def _tf_providers_extension_impl(module_ctx):
                 is_root = mod.is_root,
                 mod_name = mod.name,
             ))
+            repo_name = _repo_name_from_source(tag.source)
+            if mod.is_root and repo_name not in root_repos:
+                root_repos.append(repo_name)
 
     by_source = {}
     for t in all_tags:
@@ -347,6 +364,16 @@ def _tf_providers_extension_impl(module_ctx):
             version = resolved_version,
             sha256 = merged_sha256,
         )
+
+    # `reproducible = True`: every download is gated by the `sha256` attribute
+    # on the tag that requested it, so the repos are a pure function of the
+    # module graph and a lockfile copy would pin nothing MODULE.bazel does not.
+    non_dev = module_ctx.root_module_has_non_dev_dependency
+    return module_ctx.extension_metadata(
+        root_module_direct_deps = root_repos if non_dev else [],
+        root_module_direct_dev_deps = [] if non_dev else root_repos,
+        reproducible = True,
+    )
 
 tf_providers = module_extension(
     implementation = _tf_providers_extension_impl,

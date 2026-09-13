@@ -70,6 +70,11 @@ tf_providers.provider(
 )
 use_repo(tf_providers, "tf_providers_hashicorp_aws", "tf_providers_hashicorp_google")
 
+# `unittest`/`asserts` for the Starlark tests under //toolchain/tests. Dev-only,
+# which is why those tests are a subpackage: //toolchain:BUILD.bazel is loaded
+# by every downstream module and must not reference a dev-only repo.
+bazel_dep(name = "bazel_skylib", version = "1.9.2", dev_dependency = True)
+
 # Bazel-in-Bazel integration tests under //tests/integration.
 bazel_dep(name = "rules_bazel_integration_test", version = "0.37.1", dev_dependency = True)
 bazel_dep(name = "rules_shell", version = "0.6.1", dev_dependency = True)
