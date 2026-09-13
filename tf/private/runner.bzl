@@ -56,6 +56,13 @@ def _tf_runner_impl(ctx):
         for p in deploy.var_file_relpaths
     ])
 
+    # Emitted as a bare flag only when the deploy opts in — Go's flag package
+    # reads a valueless boolean flag as true, and omitting the line entirely
+    # leaves the runner's own `false` default in place.
+    ephemeral_state_flag = ""
+    if deploy.allow_ephemeral_state:
+        ephemeral_state_flag = "    --allow-ephemeral-state \\\n"
+
     out = ctx.actions.declare_file(ctx.label.name + ".sh")
     ctx.actions.write(
         output = out,
@@ -72,7 +79,7 @@ exec "$R/{runner}" \\
     --plugin-dir="$R/{plugin_tree}" \\
     --state-dir="${{BUILD_WORKSPACE_DIRECTORY:?must be invoked via 'bazel run'}}/{state_dir_rel}" \\
     --command="{command}" \\
-{var_file_flags}    -- "$@"
+{ephemeral_state_flag}{var_file_flags}    -- "$@"
 """.format(
             runner = runner_rel,
             tofu = tofu_rel,
@@ -81,6 +88,7 @@ exec "$R/{runner}" \\
             pkg = deploy.package_dir,
             state_dir_rel = state_dir_rel,
             command = ctx.attr.command,
+            ephemeral_state_flag = ephemeral_state_flag,
             var_file_flags = var_file_flags,
         ),
     )

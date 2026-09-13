@@ -1,0 +1,19 @@
+load("@rules_tofu//tf:defs.bzl", "tf_deploy", "tf_library")
+
+# Unlike its sibling cases, this one builds cleanly: the failure is at runtime.
+# No .tf file here declares a backend, and the deploy leaves
+# `allow_ephemeral_state` at its default of False, so `bazel run :deploy.apply`
+# must be refused by the runner before it starts tofu — with a message naming
+# `allow_ephemeral_state` as the opt-in. The defaults are the whole point of
+# the fixture: do not add a backend block, and do not set the attribute.
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+)
+
+tf_deploy(
+    name = "deploy",
+    fmt_test = False,
+    deps = [":lib"],
+)

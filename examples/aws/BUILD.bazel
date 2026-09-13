@@ -14,8 +14,12 @@ tf_library(
 # `tofu init -backend=false && tofu validate` offline against the vendored
 # provider tree. `bazel run :s3_bucket.plan` then runs a real plan; AWS
 # credentials are picked up by the provider at that point.
+#
+# This is a demo whose state is disposable, so it opts in to local state under
+# bazel-bin rather than declaring a remote backend.
 tf_deploy(
     name = "s3_bucket",
+    allow_ephemeral_state = True,
     vars = {
         "region": "us-east-1",
         "bucket_name": "rules_tofu-example-bucket",

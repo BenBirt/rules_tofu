@@ -275,6 +275,8 @@ func TestRunner_ExtraArgsPassedToApply(t *testing.T) {
 	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
 	cmd.Args = append(cmd.Args,
 		"--command=apply",
+		// No backend block here, so apply needs the ephemeral-state opt-in.
+		"--allow-ephemeral-state",
 		"--", "--replace=aws_instance.foo",
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -298,6 +300,8 @@ func TestRunner_ExtraArgsPassedToDestroy(t *testing.T) {
 	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
 	cmd.Args = append(cmd.Args,
 		"--command=destroy",
+		// No backend block here, so destroy needs the ephemeral-state opt-in.
+		"--allow-ephemeral-state",
 		"--", "--target=aws_instance.foo",
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
@@ -318,10 +322,11 @@ func TestRunner_ExtraArgsPassedToDestroy(t *testing.T) {
 }
 
 // TestRunner_StateFlags_Apply verifies that the apply invocation receives
-// -state= and -state-out= flags when no backend block is present.
+// -state= and -state-out= flags when no backend block is present. The
+// ephemeral-state opt-in is required to reach apply at all in that shape.
 func TestRunner_StateFlags_Apply(t *testing.T) {
 	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	cmd.Args = append(cmd.Args, "--command=apply")
+	cmd.Args = append(cmd.Args, "--command=apply", "--allow-ephemeral-state")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
 	}
@@ -343,10 +348,11 @@ func TestRunner_StateFlags_Apply(t *testing.T) {
 }
 
 // TestRunner_StateFlags_Destroy verifies that the destroy invocation receives
-// -state= and -state-out= flags when no backend block is present.
+// -state= and -state-out= flags when no backend block is present. The
+// ephemeral-state opt-in is required to reach destroy at all in that shape.
 func TestRunner_StateFlags_Destroy(t *testing.T) {
 	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
-	cmd.Args = append(cmd.Args, "--command=destroy")
+	cmd.Args = append(cmd.Args, "--command=destroy", "--allow-ephemeral-state")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("runner failed unexpectedly: %v\n%s", err, out)
 	}
@@ -648,6 +654,201 @@ terraform {
 	}
 	if !plan.hasArgWithPrefix("-state-out=") {
 		t.Errorf("plan invocation should have -state-out= when backend is only in sibling dir, got args: %v", plan.args)
+	}
+}
+
+// argValue returns the value of the named --flag=value entry in the runner's
+// args, failing the test if the flag is absent.
+func argValue(t *testing.T, cmd *exec.Cmd, flagName string) string {
+	t.Helper()
+	prefix := flagName + "="
+	for _, arg := range cmd.Args {
+		if strings.HasPrefix(arg, prefix) {
+			return strings.TrimPrefix(arg, prefix)
+		}
+	}
+	t.Fatalf("could not find %s flag in runner cmd args", flagName)
+	return ""
+}
+
+// envValue returns the value of the named variable in the runner's environment,
+// failing the test if it is absent.
+func envValue(t *testing.T, cmd *exec.Cmd, name string) string {
+	t.Helper()
+	prefix := name + "="
+	for _, e := range cmd.Env {
+		if strings.HasPrefix(e, prefix) {
+			return strings.TrimPrefix(e, prefix)
+		}
+	}
+	t.Fatalf("could not find %s in runner cmd env", name)
+	return ""
+}
+
+// assertRefusedEphemeralState asserts that the runner refused a mutating
+// command: it exited non-zero, named the opt-in attribute, ran no tofu process
+// at all, and did not create the state directory.
+func assertRefusedEphemeralState(t *testing.T, cmd *exec.Cmd) {
+	t.Helper()
+	logPath := envValue(t, cmd, "TOFU_LOG")
+	stateDir := argValue(t, cmd, "--state-dir")
+
+	out, err := cmd.CombinedOutput()
+	if err == nil {
+		t.Fatalf("expected runner to refuse local state, but it succeeded:\n%s", out)
+	}
+	msg := string(out)
+	if !strings.Contains(msg, "allow_ephemeral_state") {
+		t.Errorf("expected refusal to name allow_ephemeral_state, got: %s", msg)
+	}
+	if !strings.Contains(msg, stateDir) {
+		t.Errorf("expected refusal to name the state path %s, got: %s", stateDir, msg)
+	}
+
+	// The gate must fail before any tofu process starts, so the fake tofu's
+	// log must be absent (or, defensively, empty). invocations() cannot be used
+	// here: it t.Fatal's on a missing log file.
+	if info, err := os.Stat(logPath); err == nil {
+		if info.Size() > 0 {
+			data, readErr := os.ReadFile(logPath)
+			if readErr != nil {
+				t.Fatalf("read tofu invocation log: %v", readErr)
+			}
+			t.Errorf("expected no tofu invocations, got: %+v", parseInvocations(data))
+		}
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat tofu invocation log: %v", err)
+	}
+
+	if _, err := os.Stat(stateDir); err == nil {
+		t.Errorf("state dir %s should not have been created", stateDir)
+	} else if !os.IsNotExist(err) {
+		t.Fatalf("stat state dir: %v", err)
+	}
+}
+
+// TestRunner_EphemeralState_ApplyRefused verifies that apply against a deploy
+// with no backend block and no opt-in is refused outright: no tofu runs and the
+// state directory is not created.
+func TestRunner_EphemeralState_ApplyRefused(t *testing.T) {
+	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	cmd.Args = append(cmd.Args, "--command=apply")
+	assertRefusedEphemeralState(t, cmd)
+}
+
+// TestRunner_EphemeralState_DestroyRefused verifies that destroy is gated the
+// same way as apply.
+func TestRunner_EphemeralState_DestroyRefused(t *testing.T) {
+	cmd, _, _ := setup(t, map[string]any{"region": "us-east-1"})
+	cmd.Args = append(cmd.Args, "--command=destroy")
+	assertRefusedEphemeralState(t, cmd)
+}
+
+// TestRunner_EphemeralState_PlanUngated verifies that plan is deliberately not
+// gated: planning against empty local state destroys nothing, so it runs and
+// still receives the local -state= / -state-out= flags.
+func TestRunner_EphemeralState_PlanUngated(t *testing.T) {
+	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("plan should not be gated, but the runner failed: %v\n%s", err, out)
+	}
+	invs := invocations()
+	if len(invs) != 2 {
+		t.Fatalf("expected 2 tofu invocations (init, plan), got %d: %+v", len(invs), invs)
+	}
+	plan := invs[1]
+	if !plan.hasArg("plan") {
+		t.Errorf("second invocation should be 'plan', got args: %v", plan.args)
+	}
+	if !plan.hasArgWithPrefix("-state=") {
+		t.Errorf("plan invocation missing -state=, got args: %v", plan.args)
+	}
+	if !plan.hasArgWithPrefix("-state-out=") {
+		t.Errorf("plan invocation missing -state-out=, got args: %v", plan.args)
+	}
+}
+
+// TestRunner_EphemeralState_ApplyAllowed verifies that --allow-ephemeral-state
+// restores today's behaviour: apply runs and keeps the local state flags.
+func TestRunner_EphemeralState_ApplyAllowed(t *testing.T) {
+	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd.Args = append(cmd.Args, "--command=apply", "--allow-ephemeral-state")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly with --allow-ephemeral-state: %v\n%s", err, out)
+	}
+	invs := invocations()
+	// Expect: init, apply.
+	if len(invs) != 2 {
+		t.Fatalf("expected 2 tofu invocations (init, apply), got %d: %+v", len(invs), invs)
+	}
+	if !invs[0].hasArg("init") {
+		t.Errorf("first invocation should be 'init', got args: %v", invs[0].args)
+	}
+	apply := invs[1]
+	if !apply.hasArg("apply") {
+		t.Errorf("second invocation should be 'apply', got args: %v", apply.args)
+	}
+	if !apply.hasArgWithPrefix("-state=") {
+		t.Errorf("apply invocation missing -state=, got args: %v", apply.args)
+	}
+	if !apply.hasArgWithPrefix("-state-out=") {
+		t.Errorf("apply invocation missing -state-out=, got args: %v", apply.args)
+	}
+}
+
+// TestRunner_EphemeralState_DestroyAllowed verifies the opt-in applies to
+// destroy as well as apply.
+func TestRunner_EphemeralState_DestroyAllowed(t *testing.T) {
+	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	cmd.Args = append(cmd.Args, "--command=destroy", "--allow-ephemeral-state")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly with --allow-ephemeral-state: %v\n%s", err, out)
+	}
+	invs := invocations()
+	// Expect: init, destroy.
+	if len(invs) != 2 {
+		t.Fatalf("expected 2 tofu invocations (init, destroy), got %d: %+v", len(invs), invs)
+	}
+	destroy := invs[1]
+	if !destroy.hasArg("destroy") {
+		t.Errorf("second invocation should be 'destroy', got args: %v", destroy.args)
+	}
+	if !destroy.hasArgWithPrefix("-state=") {
+		t.Errorf("destroy invocation missing -state=, got args: %v", destroy.args)
+	}
+	if !destroy.hasArgWithPrefix("-state-out=") {
+		t.Errorf("destroy invocation missing -state-out=, got args: %v", destroy.args)
+	}
+}
+
+// TestRunner_EphemeralState_BackendApplyAllowed verifies that the gate keys off
+// backend detection rather than the opt-in flag: with a backend block present,
+// apply runs without the flag and the local state flags stay omitted.
+func TestRunner_EphemeralState_BackendApplyAllowed(t *testing.T) {
+	cmd, _, invocations := setup(t, map[string]any{"region": "us-east-1"})
+	backendTFContent(t, cmd, `
+terraform {
+  backend "s3" {}
+}
+`)
+	cmd.Args = append(cmd.Args, "--command=apply")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("runner failed unexpectedly with a backend block present: %v\n%s", err, out)
+	}
+	invs := invocations()
+	// Expect: init, apply.
+	if len(invs) != 2 {
+		t.Fatalf("expected 2 tofu invocations (init, apply), got %d: %+v", len(invs), invs)
+	}
+	apply := invs[1]
+	if !apply.hasArg("apply") {
+		t.Errorf("second invocation should be 'apply', got args: %v", apply.args)
+	}
+	if apply.hasArgWithPrefix("-state=") {
+		t.Errorf("apply invocation should not have -state= when backend block present, got args: %v", apply.args)
+	}
+	if apply.hasArgWithPrefix("-state-out=") {
+		t.Errorf("apply invocation should not have -state-out= when backend block present, got args: %v", apply.args)
 	}
 }
 
