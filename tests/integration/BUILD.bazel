@@ -1,12 +1,14 @@
 """Bazel-in-Bazel negative tests: assert that misusing the rules_tofu rules
 fails with a stable, user-visible error message.
 
-Each case names a target inside the sub-workspace under
-`broken_workspace/cases/<case>/` and a short stderr fragment expected when
-the nested Bazel fails on it: `_CASES` drives the target with
-`bazel build`, `_RUN_CASES` with `bazel run`. The child workspace packages
-are excluded from the parent Bazel via the `--deleted_packages` flag in
-`.bazelrc` (the "deleted packages" trick recommended by
+Each case names a sub-workspace, a target inside it under
+`cases/<case>/`, and a short stderr fragment expected when the nested Bazel
+fails on that target: `_CASES` drives the target with `bazel build`,
+`_RUN_CASES` with `bazel run`. Most cases live in `broken_workspace`, whose
+single MODULE.bazel they share; a case whose break *is* the module graph
+needs a sub-workspace of its own (`broken_module`). The child workspace
+packages are excluded from the parent Bazel via the `--deleted_packages`
+flag in `.bazelrc` (the "deleted packages" trick recommended by
 rules_bazel_integration_test), so the outer Bazel never analyzes the
 intentionally-broken case targets when expanding `//...`.
 """
@@ -24,25 +26,31 @@ sh_binary(
     srcs = ["assert_bazel_fails.sh"],
 )
 
-# The sub-workspace is a single Bazel module, so every case ships the whole
-# thing; glob once and share the list.
-_WORKSPACE_FILES = integration_test_utils.glob_workspace_files("broken_workspace") + [
-    "//:local_repository_files",
-]
+# Each sub-workspace is a single Bazel module, so every case ships the whole
+# thing; glob once per workspace and share the lists.
+_WORKSPACE_FILES = {
+    "broken_module": integration_test_utils.glob_workspace_files("broken_module") + [
+        "//:local_repository_files",
+    ],
+    "broken_workspace": integration_test_utils.glob_workspace_files("broken_workspace") + [
+        "//:local_repository_files",
+    ],
+}
 
 # Failures raised by the outer Bazel itself — loading, analysis, or an action
 # the rules emit. Driven by `bazel build`, the driver's default command.
 _CASES = [
-    # (case_name, target inside broken_workspace, stderr fragment)
-    ("duplicate_vars", "//cases/duplicate_vars:dup", "declared in both"),
-    ("duplicate_vars_hcl", "//cases/duplicate_vars:dup_hcl", "declared in both"),
-    ("validate_fails", "//cases/validate_fails:bad", "Reference to undeclared input variable"),
-    ("missing_provider", "//cases/missing_provider:missing", "Failed to query available provider packages"),
-    ("lock_file_smuggled", "//cases/lock_file_smuggled:smuggled", "refusing to validate"),
-    ("auto_tfvars_conflict", "//cases/auto_tfvars_conflict:deploy", "collides with the generated"),
-    ("external_module_ref", "//cases/external_module_ref:lib", "external Bazel module"),
-    ("malformed_var_file", "//cases/malformed_var_file:deploy", "parse:"),
-    ("conflicting_providers", "//cases/conflicting_providers:lib", "conflicting versions"),
+    # (case_name, workspace_path, target inside that workspace, stderr fragment)
+    ("duplicate_vars", "broken_workspace", "//cases/duplicate_vars:dup", "declared in both"),
+    ("duplicate_vars_hcl", "broken_workspace", "//cases/duplicate_vars:dup_hcl", "declared in both"),
+    ("validate_fails", "broken_workspace", "//cases/validate_fails:bad", "Reference to undeclared input variable"),
+    ("missing_provider", "broken_workspace", "//cases/missing_provider:missing", "Failed to query available provider packages"),
+    ("lock_file_smuggled", "broken_workspace", "//cases/lock_file_smuggled:smuggled", "refusing to validate"),
+    ("auto_tfvars_conflict", "broken_workspace", "//cases/auto_tfvars_conflict:deploy", "collides with the generated"),
+    ("external_module_ref", "broken_workspace", "//cases/external_module_ref:lib", "external Bazel module"),
+    ("malformed_var_file", "broken_workspace", "//cases/malformed_var_file:deploy", "parse:"),
+    ("conflicting_providers", "broken_workspace", "//cases/conflicting_providers:lib", "conflicting versions"),
+    ("duplicate_root_version", "broken_module", "//cases/duplicate_root_version:lib", "declares tofu.version more than once"),
 ]
 
 # Failures raised at runtime by the launcher a `tf_deploy` generates: the
@@ -50,8 +58,8 @@ _CASES = [
 # also cover the plumbing from BUILD attribute to runner flag, which the
 # runner's Go unit tests cannot see.
 _RUN_CASES = [
-    # (case_name, target inside broken_workspace, stderr fragment)
-    ("ephemeral_state_refused", "//cases/ephemeral_state_refused:deploy.apply", "allow_ephemeral_state"),
+    # (case_name, workspace_path, target inside that workspace, stderr fragment)
+    ("ephemeral_state_refused", "broken_workspace", "//cases/ephemeral_state_refused:deploy.apply", "allow_ephemeral_state"),
 ]
 
 [
@@ -66,10 +74,10 @@ _RUN_CASES = [
         },
         tags = ["exclusive"],
         test_runner = ":assert_bazel_fails",
-        workspace_files = _WORKSPACE_FILES,
-        workspace_path = "broken_workspace",
+        workspace_files = _WORKSPACE_FILES[workspace],
+        workspace_path = workspace,
     )
-    for (case_name, target, pattern) in _CASES
+    for (case_name, workspace, target, pattern) in _CASES
 ]
 
 [
@@ -85,8 +93,8 @@ _RUN_CASES = [
         },
         tags = ["exclusive"],
         test_runner = ":assert_bazel_fails",
-        workspace_files = _WORKSPACE_FILES,
-        workspace_path = "broken_workspace",
+        workspace_files = _WORKSPACE_FILES[workspace],
+        workspace_path = workspace,
     )
-    for (case_name, target, pattern) in _RUN_CASES
+    for (case_name, workspace, target, pattern) in _RUN_CASES
 ]

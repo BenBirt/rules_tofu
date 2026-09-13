@@ -1,0 +1,11 @@
+load("@rules_tofu//tf:defs.bzl", "tf_library")
+
+# Nothing is wrong with this library; the break is in the workspace's
+# MODULE.bazel. Module extensions are lazy, so the case needs a target whose
+# analysis reaches the OpenTofu toolchain — which forces `@tofu_toolchains`
+# to be fetched and the extension to run.
+tf_library(
+    name = "lib",
+    srcs = ["main.tf"],
+    fmt_test = False,
+)

@@ -1,0 +1,3 @@
+load(":version_resolution_test.bzl", "version_resolution_test_suite")
+
+version_resolution_test_suite(name = "version_resolution_test")

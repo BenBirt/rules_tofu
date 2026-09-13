@@ -6,8 +6,32 @@ Downstream usage in MODULE.bazel:
     tofu = use_extension("@rules_tofu//toolchain:extensions.bzl", "tofu")
     # tofu.version(version = "1.8.5")  # optional override
     use_repo(tofu, "tofu_toolchains")
+
+rules_tofu registers exactly one OpenTofu toolchain for the whole build, so
+every `tofu.version` tag in the module graph has to collapse to a single
+version. The root module arbitrates:
+
+  1. Two or more `tofu.version` tags in the **root** module → error. There is
+     one toolchain; asking for two versions is a mistake in the root's own
+     MODULE.bazel, not something to settle by letting the last tag win.
+  2. Exactly one root tag → that version wins unconditionally, whatever
+     non-root modules ask for. The root owns the tool its builds run.
+  3. No root tag and all non-root requests agree → that version. A
+     dependency's explicit need is honoured rather than quietly replaced by
+     `DEFAULT_VERSION`.
+  4. No root tag and non-root modules request different versions → error
+     naming both the versions and the modules that asked for them. A single
+     global toolchain genuinely cannot satisfy both, and picking one silently
+     would bury the disagreement.
+  5. No tags anywhere → `DEFAULT_VERSION`.
+
+However it is reached, the resolved version must appear in `KNOWN_VERSIONS`.
+The branching lives in //toolchain:version_resolution.bzl so it is
+unit-testable without a module graph; this file is the adapter that collects
+the tags and owns the `fail()`.
 """
 
+load("//toolchain:version_resolution.bzl", "resolve_version")
 load("//toolchain:versions.bzl", "DEFAULT_VERSION", "KNOWN_VERSIONS", "PLATFORMS")
 
 # ---- Per-platform download repository rule -----------------------------------
@@ -107,13 +131,19 @@ _version_tag = tag_class(
 )
 
 def _tofu_extension_impl(module_ctx):
-    version = DEFAULT_VERSION
+    requests = []
     for mod in module_ctx.modules:
         for tag in mod.tags.version:
-            if not mod.is_root:
-                # Non-root modules don't get to override the version.
-                continue
-            version = tag.version
+            requests.append(struct(
+                version = tag.version,
+                is_root = mod.is_root,
+                module_name = mod.name,
+            ))
+
+    resolved = resolve_version(requests, DEFAULT_VERSION)
+    if resolved.error:
+        fail(resolved.error)
+    version = resolved.version
 
     if version not in KNOWN_VERSIONS:
         fail(
@@ -136,6 +166,20 @@ def _tofu_extension_impl(module_ctx):
         )
 
     _tofu_hub(name = "tofu_toolchains")
+
+    # The hub is the only repo a downstream `use_repo`s; the per-platform
+    # `tofu_<platform>` repos are an implementation detail the hub's
+    # `toolchain()` entries reference by name and must stay off the root's
+    # direct-dep list. `reproducible = True`: the repos are a pure function of
+    # the module graph and the sha256 table in //toolchain:versions.bzl, so a
+    # lockfile copy of them would pin nothing the source does not already.
+    hub = ["tofu_toolchains"]
+    non_dev = module_ctx.root_module_has_non_dev_dependency
+    return module_ctx.extension_metadata(
+        root_module_direct_deps = hub if non_dev else [],
+        root_module_direct_dev_deps = [] if non_dev else hub,
+        reproducible = True,
+    )
 
 tofu = module_extension(
     implementation = _tofu_extension_impl,

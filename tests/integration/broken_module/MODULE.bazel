@@ -1,0 +1,38 @@
+"""Module declaration for the nested Bazel invocation that asserts the tofu
+extension refuses a root module declaring `tofu.version` twice.
+
+This is the break: the module graph itself is malformed, so the failure has
+no case-specific BUILD target to live behind and cannot be expressed in
+`broken_workspace`, which shares one MODULE.bazel across all of its cases.
+`cases/duplicate_root_version` exists only to give the nested Bazel a target
+whose analysis forces the extension to be evaluated.
+"""
+
+module(
+    name = "rules_tofu_broken_module_tests",
+    version = "0.0.0",
+)
+
+# Version is irrelevant: `local_path_override` below always wins (same
+# pattern as broken_workspace and e2e/smoke).
+bazel_dep(name = "rules_tofu", version = "0.0.0")
+local_path_override(
+    module_name = "rules_tofu",
+    path = "../../..",
+)
+
+bazel_dep(name = "platforms", version = "1.0.0")
+bazel_dep(name = "rules_go", version = "0.60.0")
+
+go_sdk = use_extension("@rules_go//go:extensions.bzl", "go_sdk")
+go_sdk.download(version = "1.26.3")
+
+# Two `tofu.version` tags in the root module. rules_tofu registers a single
+# global toolchain, so the extension fails rather than letting the last tag
+# silently win.
+tofu = use_extension("@rules_tofu//toolchain:extensions.bzl", "tofu")
+tofu.version(version = "1.12.0")
+tofu.version(version = "1.8.5")
+use_repo(tofu, "tofu_toolchains")
+
+register_toolchains("@tofu_toolchains//:all")
