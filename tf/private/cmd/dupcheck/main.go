@@ -4,15 +4,12 @@
 //
 // It is invoked from the `tf_deploy` rule via a Bazel build action.
 // Inputs:
-//   - --vars-key=<name>      (repeatable) — one entry per key in the deploy's
-//                                          `vars` dict, known statically.
+//   - --vars-key=<name> (repeatable) — one entry per key in the deploy's
+//     `vars` dict, known statically.
 //   - --var-file=<label>:<path> (repeatable) — `label` is a human-readable
-//                                          identifier (typically the file's
-//                                          workspace-relative path); `path`
-//                                          points at a `.tfvars.json` or `.tfvars` file
-//                                          whose top-level keys are checked.
-//   - --stamp=<path>         — file touched on success.
-//
+//     identifier, typically the file's workspace-relative path; `path` points
+//     at a `.tfvars.json` or `.tfvars` file whose top-level keys are checked.
+//   - --stamp=<path> — file touched on success.
 package main
 
 import (

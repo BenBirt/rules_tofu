@@ -4,6 +4,9 @@
 //
 // Responsibilities:
 //   - Validate we were invoked via `bazel run` (BUILD_WORKSPACE_DIRECTORY set).
+//   - Refuse apply/destroy when the deploy declares no state backend and has
+//     not opted in via --allow-ephemeral-state, since local state under
+//     bazel-bin does not survive `bazel clean`.
 //   - Run `tofu init` inside the pre-materialized work tree.
 //   - For plan: emit a plan artifact and stop.
 //   - For apply/destroy: delegate to tofu, passing through any extra args.
@@ -47,6 +50,10 @@ var (
 	varFiles   = stringListFlag("var-file", "path to a .tfvars.json file passed to tofu via -var-file (repeatable)")
 
 	stateDir = flag.String("state-dir", "", "absolute path to the per-deploy state directory")
+
+	allowEphemeralState = flag.Bool("allow-ephemeral-state", false,
+		"permit apply/destroy against local state under bazel-bin when the deploy declares no backend; "+
+			"set by tf_deploy(allow_ephemeral_state = True)")
 
 	tofu    = flag.String("tofu", "", "path to the tofu binary")
 	command = flag.String("command", "", `"plan", "apply", or "destroy"`)
@@ -94,13 +101,29 @@ func run() error {
 				"BUILD_WORKSPACE_DIRECTORY is unset, so state cannot be persisted.",
 		)
 	}
-	if err := os.MkdirAll(*stateDir, 0o755); err != nil {
-		return fmt.Errorf("create %s: %w", *stateDir, err)
-	}
-
 	cwd := filepath.Join(*workTree, *packageDir)
 	if _, err := os.Stat(cwd); err != nil {
 		return fmt.Errorf("work-tree cwd %s: %w", cwd, err)
+	}
+
+	// Backend detection is a read-only scan of the root module's .tf files, so
+	// it does not depend on init having run. Compute it once, up front: the
+	// ephemeral-state gate below needs the answer before any tofu process is
+	// started or any directory is created, and the state flags reuse it.
+	backend := hasBackend(cwd)
+	planFile := filepath.Join(*stateDir, "tfplan")
+	stateFile := filepath.Join(*stateDir, "terraform.tfstate")
+
+	// Refuse to mutate real infrastructure against throwaway local state.
+	// Deliberately fails ahead of everything else: no tofu runs and the state
+	// directory is not created. `plan` is ungated — planning against empty
+	// local state destroys nothing.
+	if (*command == "apply" || *command == "destroy") && !backend && !*allowEphemeralState {
+		return ephemeralStateError(*command, stateFile)
+	}
+
+	if err := os.MkdirAll(*stateDir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", *stateDir, err)
 	}
 
 	// TF_IN_AUTOMATION=1 suppresses usage-hint lines in tofu output that
@@ -111,20 +134,18 @@ func run() error {
 	env := append(os.Environ(), "TF_IN_AUTOMATION=1")
 
 	// Ensure the vendored plugin tree exists even when zero providers are in
-	// scope (the deploy declares no symlinks under .rules_tofu-plugins/ in that
-	// case, so the runfiles tree lacks the directory). -plugin-dir overrides
-	// all default plugin search paths and prevents the registry from being
-	// contacted at runtime.
+	// scope (the deploy declares no symlinks under the sibling <name>.plugins/
+	// tree in that case, so the runfiles tree lacks the directory).
+	// -plugin-dir overrides all default plugin search paths and prevents the
+	// registry from being contacted at runtime.
 	if err := os.MkdirAll(*pluginDir, 0o755); err != nil {
 		return fmt.Errorf("create plugin dir %s: %w", *pluginDir, err)
 	}
 	if err := runTofu(env, cwd, "init", "-input=false", "-plugin-dir="+*pluginDir); err != nil {
 		return fmt.Errorf("tofu init: %w", err)
 	}
-	planFile := filepath.Join(*stateDir, "tfplan")
-	stateFile := filepath.Join(*stateDir, "terraform.tfstate")
 	stateArgs := []string{"-state=" + stateFile, "-state-out=" + stateFile}
-	if hasBackend(cwd) {
+	if backend {
 		stateArgs = nil
 	}
 	varFileArgs := make([]string, len(*varFiles))
@@ -157,6 +178,49 @@ func run() error {
 		}
 	}
 	return nil
+}
+
+// ephemeralStateError is the refusal returned when apply/destroy would write
+// local state. It is the whole user-facing surface of the gate, so it names the
+// state path, the recommended fix, and the opt-in verbatim.
+func ephemeralStateError(command, stateFile string) error {
+	return fmt.Errorf(`rules_tofu: refusing to run "tofu %s": this deploy declares no state backend, so its state would be written to
+
+    %s
+
+That path is machine-local and disposable. It sits under bazel-bin, so
+"bazel clean" deletes it; it embeds the build configuration, so building with
+-c opt or a different --platforms silently forks to a different state file; and
+a colleague running this target from their own checkout gets their own private
+copy. Losing or forking that file orphans every resource this command creates:
+the infrastructure carries on existing with nothing tracking it.
+
+Recommended fix — declare a remote backend in a .tf file listed in this
+deploy's srcs:
+
+    terraform {
+      backend "gcs" {
+        bucket = "my-tofu-state"
+        prefix = "prod"
+      }
+    }
+
+(Any backend, or a cloud {} block, will do.) With one present, the runner
+defers to it entirely and this check no longer applies.
+
+If disposable state is the point — a demo or example, a throwaway sandbox, or
+bootstrapping the bucket that will later hold real state — opt in explicitly by
+setting
+
+    allow_ephemeral_state = True
+
+on the tf_deploy target. For the bootstrap case, add the backend block once the
+bucket exists and move the existing state into it with:
+
+    tofu init -migrate-state
+
+The deploy's .plan target is never gated, so planning still works either way.`,
+		command, stateFile)
 }
 
 func runTofu(env []string, cwd string, args ...string) error {

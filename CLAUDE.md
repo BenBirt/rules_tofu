@@ -87,6 +87,13 @@ unaffected. Locally, exercise the parts that don't pull in the runner:
 - The runner expects `--plugin-dir` to be required, and `os.MkdirAll`s
   it on first use so the zero-providers case still presents tofu with
   an extant directory. Don't make the flag optional.
+- The runner refuses `apply`/`destroy` when no backend/cloud block is
+  detected and `tf_deploy(allow_ephemeral_state = ...)` is unset: local
+  state under `bazel-bin` is machine-local and `bazel clean`-able, so
+  applying against it orphans live infra. The gate lives in the Go runner
+  (backend detection is a runtime filesystem scan), fires before any tofu
+  process starts or the state dir is created, and `plan` stays ungated.
+  Don't downgrade it to a warning.
 - Shared materialization helpers live in `tf/private/work_tree.bzl`
   (`materialize`, `materialize_plugin_tree`, `work_tree_root`,
   `plugin_tree_root`). Both `library.bzl` and `deploy.bzl` should go

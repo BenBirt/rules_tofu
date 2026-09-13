@@ -187,12 +187,37 @@ A `bazel build` action checks for duplicate variable keys across `vars`
 and all `var_files` entries — overlaps fail the build (with caching),
 not the run.
 
-State is persisted per-deploy at the deploy target's `$(RULEDIR)`, i.e.
-`bazel-bin/<package>/<name>.rules_tofu-state/` (already covered by the
-standard `bazel-*` gitignore and wiped by `bazel clean`). If the
-deploy declares a `backend "..." {}` or `cloud {}` block in any of its
-`.tf` files, the runner defers to that backend and skips the local-state
-flags.
+Any deploy that manages real infrastructure is expected to declare a
+`backend "..." {}` or `cloud {}` block in one of its own `.tf` files. When
+one is present the runner defers to that backend entirely and passes no
+local-state flags.
+
+With no backend block, state falls back to the deploy target's
+`$(RULEDIR)`, i.e. `bazel-bin/<package>/<name>.rules_tofu-state/`. That
+location is disposable by construction: `bazel clean` deletes it, the path
+embeds the build configuration (so `-c opt` or a different `--platforms`
+forks to a separate state file), and it is machine-local, so two engineers
+each get their own copy. Losing or forking it orphans whatever was applied.
+
+So `:<name>.apply` and `:<name>.destroy` **refuse to run** against a deploy
+with no backend block, naming the path and the fix. `:<name>.plan` is never
+gated — planning against empty local state destroys nothing.
+
+Where disposable state is the point, opt in explicitly:
+
+```python
+tf_deploy(
+    name = "sandbox",
+    allow_ephemeral_state = True,
+    deps = [":lib"],
+)
+```
+
+That is appropriate for demos and examples, throwaway sandboxes, and the
+bootstrap case — using tofu to create the bucket that will later hold real
+state. For bootstrapping, add the backend block once the bucket exists and
+move the state into it with `tofu init -migrate-state`, then drop the
+attribute.
 
 ## Module source paths
 
@@ -231,6 +256,12 @@ module "dns" {
   across `vars` and every `var_files` entry.
 - Variable keys must be unique across `vars` and all `var_files` entries.
   A dedicated `bazel build` action checks this and fails on any overlap.
+- `:<name>.apply` and `:<name>.destroy` are refused when the deploy
+  declares no `backend "..." {}` or `cloud {}` block, because the local
+  fallback state under `bazel-bin` is machine-local and deleted by
+  `bazel clean`. Declare a backend, or set
+  `tf_deploy(allow_ephemeral_state = True)` where that loss is harmless.
+  `:<name>.plan` is not gated.
 - Files from external Bazel modules cannot be included in a deploy: the
   runner cannot give them a sensible workspace-relative path that
   Terraform's local-module addressing can reach.

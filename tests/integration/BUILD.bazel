@@ -2,9 +2,10 @@
 fails with a stable, user-visible error message.
 
 Each case names a target inside the sub-workspace under
-`broken_workspace/cases/<case>/` and a short stderr fragment expected
-when `bazel build :<target>` fails. The child workspace packages are
-excluded from the parent Bazel via the `--deleted_packages` flag in
+`broken_workspace/cases/<case>/` and a short stderr fragment expected when
+the nested Bazel fails on it: `_CASES` drives the target with
+`bazel build`, `_RUN_CASES` with `bazel run`. The child workspace packages
+are excluded from the parent Bazel via the `--deleted_packages` flag in
 `.bazelrc` (the "deleted packages" trick recommended by
 rules_bazel_integration_test), so the outer Bazel never analyzes the
 intentionally-broken case targets when expanding `//...`.
@@ -19,10 +20,18 @@ load(
 load("@rules_shell//shell:sh_binary.bzl", "sh_binary")
 
 sh_binary(
-    name = "assert_build_fails",
-    srcs = ["assert_build_fails.sh"],
+    name = "assert_bazel_fails",
+    srcs = ["assert_bazel_fails.sh"],
 )
 
+# The sub-workspace is a single Bazel module, so every case ships the whole
+# thing; glob once and share the list.
+_WORKSPACE_FILES = integration_test_utils.glob_workspace_files("broken_workspace") + [
+    "//:local_repository_files",
+]
+
+# Failures raised by the outer Bazel itself — loading, analysis, or an action
+# the rules emit. Driven by `bazel build`, the driver's default command.
 _CASES = [
     # (case_name, target inside broken_workspace, stderr fragment)
     ("duplicate_vars", "//cases/duplicate_vars:dup", "declared in both"),
@@ -36,6 +45,15 @@ _CASES = [
     ("conflicting_providers", "//cases/conflicting_providers:lib", "conflicting versions"),
 ]
 
+# Failures raised at runtime by the launcher a `tf_deploy` generates: the
+# target builds cleanly and the refusal comes from the runner process. These
+# also cover the plumbing from BUILD attribute to runner flag, which the
+# runner's Go unit tests cannot see.
+_RUN_CASES = [
+    # (case_name, target inside broken_workspace, stderr fragment)
+    ("ephemeral_state_refused", "//cases/ephemeral_state_refused:deploy.apply", "allow_ephemeral_state"),
+]
+
 [
     bazel_integration_test(
         name = case_name + "_test",
@@ -47,11 +65,28 @@ _CASES = [
             "EXPECTED_PATTERN": pattern,
         },
         tags = ["exclusive"],
-        test_runner = ":assert_build_fails",
-        workspace_files = integration_test_utils.glob_workspace_files("broken_workspace") + [
-            "//:local_repository_files",
-        ],
+        test_runner = ":assert_bazel_fails",
+        workspace_files = _WORKSPACE_FILES,
         workspace_path = "broken_workspace",
     )
     for (case_name, target, pattern) in _CASES
+]
+
+[
+    bazel_integration_test(
+        name = case_name + "_test",
+        timeout = "moderate",
+        bazel_binaries = bazel_binaries,
+        bazel_version = bazel_binaries.versions.current,
+        env = {
+            "BAZEL_COMMAND": "run",
+            "TARGET": target,
+            "EXPECTED_PATTERN": pattern,
+        },
+        tags = ["exclusive"],
+        test_runner = ":assert_bazel_fails",
+        workspace_files = _WORKSPACE_FILES,
+        workspace_path = "broken_workspace",
+    )
+    for (case_name, target, pattern) in _RUN_CASES
 ]

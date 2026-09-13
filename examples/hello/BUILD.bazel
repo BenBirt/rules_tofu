@@ -7,8 +7,11 @@ tf_library(
     srcs = ["main.tf"],
 )
 
+# A demo deploy: its state is disposable, so it opts in to local state under
+# bazel-bin rather than declaring a remote backend.
 tf_deploy(
     name = "hello",
+    allow_ephemeral_state = True,
     vars = {
         "name": "world",
     },

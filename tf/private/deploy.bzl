@@ -89,6 +89,7 @@ def _tf_deploy_impl(ctx):
             work_tree_files = work_tree_files,
             package_dir = ctx.label.package,
             var_file_relpaths = [f.short_path for f in ctx.files.var_files],
+            allow_ephemeral_state = ctx.attr.allow_ephemeral_state,
         ),
     ]
 
@@ -124,6 +125,16 @@ tf_deploy_rule = rule(
                   "Each entry is typically a `@<repo>//:provider` target exposed by " +
                   "`tf_providers.provider(...)` in MODULE.bazel.",
         ),
+        "allow_ephemeral_state": attr.bool(
+            default = False,
+            doc = "Permit `apply`/`destroy` to run against local, disposable state. " +
+                  "With no `backend`/`cloud` block, state lands under " +
+                  "`bazel-bin/<pkg>/<name>.rules_tofu-state/` — machine-local, keyed by " +
+                  "build configuration, and wiped by `bazel clean` — so the runner refuses " +
+                  "those commands by default. Set True only where losing state is harmless: " +
+                  "demos, throwaway sandboxes, or bootstrapping the bucket that will hold real " +
+                  "state. `plan` is never gated.",
+        ),
         "_dupcheck_bin": attr.label(
             default = DUPCHECK_BIN,
             executable = True,
@@ -134,7 +145,7 @@ tf_deploy_rule = rule(
     doc = "Underlying data-carrier for `tf_deploy`. Use the macro.",
 )
 
-def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, data = None, providers = None, fmt_test = True, **kwargs):
+def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, data = None, providers = None, allow_ephemeral_state = False, fmt_test = True, **kwargs):
     """A root Terraform/OpenTofu invocation.
 
     Always generates:
@@ -165,6 +176,18 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
           level. Unioned with providers transitively contributed by `deps`. The exec
           platform binary is symlinked into a sibling plugin tree; `tofu init`
           runs offline against it.
+      allow_ephemeral_state: allow `:<name>.apply` and `:<name>.destroy` to run
+          against local state. A deploy with no `backend "..." {}` or `cloud {}`
+          block keeps its state at
+          `bazel-bin/<pkg>/<name>.rules_tofu-state/terraform.tfstate`, which is
+          machine-local, forks with the build configuration, and is deleted by
+          `bazel clean` — losing it orphans whatever was applied. So by default
+          the runner refuses both mutating commands for such a deploy; `plan` is
+          never gated. Set True only where disposable state is the point: demos
+          and examples, throwaway sandboxes, or bootstrapping the bucket that
+          will hold real state (then move it with
+          `tofu init -migrate-state` once the backend block is in place).
+          Ignored when a backend/cloud block is present.
       fmt_test: whether to emit a `:<name>.fmt_check` test target. Only emitted
           when True (the default) and `srcs` is non-empty.
       **kwargs: forwarded to the underlying rule (visibility, tags, testonly).
@@ -182,6 +205,7 @@ def tf_deploy(name, srcs = None, deps = None, vars = None, var_files = None, dat
         var_files = var_files or [],
         data = data or [],
         providers = providers or [],
+        allow_ephemeral_state = allow_ephemeral_state,
         **dict(common_kwargs, **kwargs)
     )
 
